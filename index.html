@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#101827">
+<title>Wi-Fi Camera Scanner</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#131f32;--line:#26364d;--muted:#9aabc2;--text:#eef4ff;--accent:#66a8ff;--green:#53d69a;--amber:#ffc66d}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:850px;margin:auto;padding:22px 15px 48px}.top{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.logo{width:44px;height:44px;border-radius:14px;background:#1d3555;display:grid;place-items:center;font-size:23px}
+h1{font-size:21px;margin:0}p{color:var(--muted);line-height:1.5;margin:5px 0}
+.panel,.device{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin:12px 0}
+button{border:0;border-radius:12px;background:var(--accent);color:#071426;font-weight:750;padding:13px 18px;font-size:15px;width:100%;cursor:pointer}
+button:disabled{opacity:.55}.status{margin-top:12px;color:var(--muted);font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.stat{background:#0d1727;border:1px solid var(--line);border-radius:12px;padding:11px}.stat b{display:block;font-size:20px}.stat span{color:var(--muted);font-size:12px}
+.device-head{display:flex;justify-content:space-between;gap:8px;align-items:center}.ip{font-weight:750;font-size:17px}
+.tag{font-size:11px;border-radius:99px;padding:5px 9px;background:#203b34;color:var(--green)}
+.tag.unknown{background:#3b3020;color:var(--amber)}.ports{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}
+.port{font-size:12px;padding:5px 8px;border-radius:8px;background:#223149;color:#dbe8ff}
+small{color:var(--muted)}.empty{text-align:center;padding:28px 12px;color:var(--muted)}
+a{color:var(--accent);word-break:break-all}.disclaimer{font-size:12px;margin-top:20px}
+</style>
+</head>
+<body><main>
+<header class="top"><div class="logo">📷</div><div><h1>Wi-Fi Camera Scanner</h1><p>Поиск устройств и портов в вашей локальной Wi-Fi сети</p></div></header>
+<section class="panel">
+  <p>Сканер проверяет устройства в локальной подсети телефона. Запускайте его только в своей сети или с разрешения владельца.</p>
+  <button id="scan">Начать сканирование</button>
+  <div class="status" id="status">Ожидание запуска</div>
+  <div class="stats">
+    <div class="stat"><b id="count">—</b><span>Устройств найдено</span></div>
+    <div class="stat"><b id="cameraCount">—</b><span>Похожи на камеры</span></div>
+    <div class="stat"><b id="duration">—</b><span>Время, сек</span></div>
+  </div>
+</section>
+<section id="network" class="panel" hidden></section>
+<section id="results"><div class="empty">Нажмите «Начать сканирование».</div></section>
+<p class="disclaimer">Важно: найденный открытый порт не гарантирует, что это камера. Сканер не получает видео и не подбирает пароли. RTSP/ONVIF могут быть отключены производителем или настройками устройства.</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+$('scan').addEventListener('click', async()=>{
+  const btn=$('scan');btn.disabled=true;btn.textContent='Сканирование…';
+  $('status').textContent='Проверяем устройства. Это может занять до минуты…';
+  $('results').innerHTML='<div class="empty">Идёт поиск…</div>';
+  try{
+    const res=await fetch('/api/scan',{cache:'no-store'});
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.error||'Ошибка сканирования');
+    $('network').hidden=false;
+    $('network').innerHTML='<b>Сеть:</b> '+esc(data.network)+'<br><small>IP телефона: '+esc(data.phone_ip)+' · Проверено адресов: '+data.scanned+'</small>';
+    $('count').textContent=data.devices.length;
+    $('cameraCount').textContent=data.devices.filter(x=>x.camera_hint).length;
+    $('duration').textContent=data.duration_seconds;
+    $('status').textContent='Сканирование завершено';
+    if(!data.devices.length){$('results').innerHTML='<div class="empty">Устройства с открытыми проверяемыми портами не найдены.</div>';return;}
+    $('results').innerHTML=data.devices.map(d=>{
+      const ports=d.ports.map(p=>'<span class="port">'+p.port+' · '+esc(p.service)+(p.rtsp_response?' · RTSP ответ':'')+'</span>').join('');
+      const details=Object.entries(d.http||{}).filter(([k,v])=>v.server||v.title).map(([k,v])=>'<small>HTTP '+k+': '+esc([v.server,v.title].filter(Boolean).join(' / '))+'</small>').join('<br>');
+      const reasons=(d.camera_reasons||[]).map(esc).join(', ');
+      return '<article class="device"><div class="device-head"><div class="ip">'+esc(d.ip)+'</div><span class="tag '+(d.camera_hint?'':'unknown')+'">'+(d.camera_hint?'Возможная камера':'Устройство')+'</span></div><div class="ports">'+ports+'</div>'+details+(reasons?'<p><small>Признаки: '+reasons+'</small></p>':'')+'</article>';
+    }).join('');
+  }catch(e){$('status').textContent='Не удалось выполнить проверку';$('results').innerHTML='<div class="panel">'+esc(e.message)+'</div>';}
+  finally{btn.disabled=false;btn.textContent='Сканировать ещё раз';}
+});
+</script>
+</body></html>
